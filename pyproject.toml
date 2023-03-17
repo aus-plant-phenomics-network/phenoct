@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0","pandas>=1.5.0","scikit-learn>=1.2.2","plantcv>=3.14.2","tifffile>=2022.10.10","opencv-python>=4.6.0.66","scipy>=1.9.2","tqdm>=4.64.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phenoct"
+version = "1.0.0"
+authors = [
+  { name="George Sainsbury", email="george.sainsbury@adelaide.edu.au" },
+]
+description = "A packge with utilities for analysing data from the PhenoCT system at The Plant Accelerator."
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/aus-plant-phenomics-facility/phenoct"
+"Bug Tracker" = "https://github.com/aus-plant-phenomics-facility/phenoct/issues"
