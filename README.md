@@ -2,10 +2,12 @@
 Utilities for analysing data from the PhenoCT system at The Plant Accelerator.
 
 
-# examples
-```python
 
-```
+# Installation
+`pip install git+https://github.com/aus-plant-phenomics-facility/phenoct.git@v1.0.0`
+
+
+examples are in the tests.ipynb Notebook.
 
 # Development
 ```python
