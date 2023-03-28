@@ -80,6 +80,9 @@ class CT:
             raise Exception("Not yet segemented.")
         write_8bit_tiff(self.segmented_data, out_filename, compression)
 
+    def view_data(self):
+        viewer = napari.view_image(self.data)
+
 
 class Tube(CT):
 
@@ -202,13 +205,16 @@ class Tube(CT):
 
             return final_mask
 
-        o_height = stop_slice - start_slice if stop_slice is not None else self.data.shape[0]
-        segmented_data = np.zeros((o_height, self.data.shape[1], self.data.shape[2]), dtype='uint16')
-        masks = np.zeros((o_height, self.data.shape[1], self.data.shape[2]), dtype='uint16')
+        #o_height = stop_slice - start_slice if stop_slice is not None else self.data.shape[0]
+        segmented_data = np.zeros(self.data.shape, dtype='uint16')
+        masks = np.zeros(self.data.shape, dtype='uint16')
 
-        for v_slice in (pbar := tqdm(range(0, o_height), total=o_height)):
+        if stop_slice is None:
+            stop_slice = self.data.shape[0]
+
+        for v_slice in (pbar := tqdm(range(start_slice, stop_slice), total=stop_slice-start_slice)):
             pbar.set_description(f"Segmenting slice: {v_slice}")
-            img = self.data[start_slice + v_slice, :, :]
+            img = self.data[v_slice, :, :]
 
             mask = segment_slice(img)
             masks[v_slice] = mask
@@ -228,15 +234,25 @@ class Tube(CT):
         if self.segmented_data is None:
             raise Exception("Data has not yet been segmented.")
 
+
+        data_to_watershed, t = crop_any(self.segmented_data)
+
+        # print(translations)
+        # return
+
         # Now we want to separate the two objects in image
         # Generate the markers as local maxima of the distance to the background
-        distance = ndi.distance_transform_edt(self.segmented_data)
-        coords = peak_local_max(distance, labels=self.segmented_data)
+        distance = ndi.distance_transform_edt(data_to_watershed)
+        coords = peak_local_max(distance, labels=data_to_watershed)
         mask = np.zeros(distance.shape, dtype=bool)
         mask[tuple(coords.T)] = True
         markers, _ = ndi.label(mask)
-        labels = watershed(-distance, markers, mask=self.segmented_data)
-        self.labels = labels
+        labels = watershed(-distance, markers, mask=data_to_watershed)
+        translated_labels = np.zeros(self.segmented_data.shape, dtype=labels.dtype)
+        np.copyto(translated_labels[tuple([slice(0, n) for n in labels.shape])], labels)
+        for i in range(3):
+            translated_labels = np.roll(translated_labels, t[i], axis=i)
+        self.labels = translated_labels
 
     def write_colourised_tiff(self, filename):
         """
@@ -358,6 +374,10 @@ class Tube(CT):
             compression='zlib'
         )
 
+    def view_segmented_data(self):
+        viewer = napari.view_image(self.data)
+        labels_layer = viewer.add_labels(self.labels, name='segmentation')
+
 
 def crop_any(data):
     """
@@ -370,7 +390,7 @@ def crop_any(data):
     cropped_arr = data[nonzero_indices[0].min():nonzero_indices[0].max() + 1,
                   nonzero_indices[1].min():nonzero_indices[1].max() + 1,
                   nonzero_indices[2].min():nonzero_indices[2].max() + 1]
-    return cropped_arr
+    return cropped_arr, (nonzero_indices[0].min(),nonzero_indices[1].min(),nonzero_indices[2].min())
 
 
 def write_tiff(data, out_filename, compression=False):
