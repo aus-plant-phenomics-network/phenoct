@@ -119,8 +119,6 @@ class Tube(CT):
         # TODO: Ensure viewer closes properly
         viewer.close()
 
-    # TODO: Create viewer function, and/or allow data export.
-
     def segment_sample_holder(self, start_slice=0, stop_slice=None, tube_r=160, tube_thickness=30,
                               attenuation_threshold=None,
                               debug=False, pcv_debug=False):
@@ -131,7 +129,8 @@ class Tube(CT):
         :param stop_slice: slice at which to stop. 2640 is normally a good value.
         :param tube_r: the radius of the sample_holder, in voxels.
         :param tube_thickness: the thickness of the sample_holder tube, in voxels.
-        :param attenuation_threshold: the attenuation value above which to include. If not specified, defaults to the mean.
+        :param attenuation_threshold: either the attenuation value above which to include (int), or a list of 2 ints.
+                If not specified, defaults to the mean.
         :param debug: use plot as output for images.
         :param pcv_debug: enable plantcv debugging.
         :return: 3D masked data, and 3D binary masks
@@ -150,11 +149,35 @@ class Tube(CT):
             else:
                 pcv.params.debug = None
 
-            med_v = (_v_slice.max() + _v_slice.min()) // 2 if attenuation_threshold is None else attenuation_threshold
+            # TODO: Remove plantcv and replace with numpy directly?
+            if isinstance(attenuation_threshold, int):
 
-            # TODO: Remove plantcv and replace with numpy directly.
-            s_thresh = pcv.threshold.binary(gray_img=_v_slice, threshold=med_v, max_value=2 ** 16,
-                                            object_type='light')
+                med_v = attenuation_threshold
+
+                s_thresh = pcv.threshold.binary(gray_img=_v_slice, threshold=med_v, max_value=2 ** 16,
+                                                object_type='light')
+
+            elif isinstance(attenuation_threshold, list) or isinstance(attenuation_threshold, tuple):
+                min_v = attenuation_threshold[0]
+                max_v = attenuation_threshold[1]
+
+                s_thresh_min = pcv.threshold.binary(gray_img=_v_slice, threshold=min_v, max_value=2 ** 16,
+                                                    object_type='light')
+
+                s_thresh_max = pcv.threshold.binary(gray_img=_v_slice, threshold=max_v, max_value=2 ** 16,
+                                                    object_type='dark')
+
+                s_thresh = pcv.logical_and(s_thresh_min, s_thresh_max)
+
+            elif attenuation_threshold is None:
+
+                med_v = (_v_slice.max() + _v_slice.min()) // 2
+
+                s_thresh = pcv.threshold.binary(gray_img=_v_slice, threshold=med_v, max_value=2 ** 16,
+                                                object_type='light')
+            else:
+                raise Exception("Please specify attenuation threshold as an integer or list.")
+
             s_thresh = s_thresh.astype('uint8')
 
             if debug:
@@ -205,14 +228,14 @@ class Tube(CT):
 
             return final_mask
 
-        #o_height = stop_slice - start_slice if stop_slice is not None else self.data.shape[0]
+        # o_height = stop_slice - start_slice if stop_slice is not None else self.data.shape[0]
         segmented_data = np.zeros(self.data.shape, dtype='uint16')
         masks = np.zeros(self.data.shape, dtype='uint16')
 
         if stop_slice is None:
             stop_slice = self.data.shape[0]
 
-        for v_slice in (pbar := tqdm(range(start_slice, stop_slice), total=stop_slice-start_slice)):
+        for v_slice in (pbar := tqdm(range(start_slice, stop_slice), total=stop_slice - start_slice)):
             pbar.set_description(f"Segmenting slice: {v_slice}")
             img = self.data[v_slice, :, :]
 
@@ -233,7 +256,6 @@ class Tube(CT):
         """
         if self.segmented_data is None:
             raise Exception("Data has not yet been segmented.")
-
 
         data_to_watershed, t = crop_any(self.segmented_data)
 
@@ -375,7 +397,13 @@ class Tube(CT):
         )
 
     def view_segmented_data(self):
+        viewer = napari.view_image(self.segmented_data)
+
+    def view_labelled_data(self):
         viewer = napari.view_image(self.data)
+
+        if self.labels is None:
+            raise ("Not yet watershed.")
         labels_layer = viewer.add_labels(self.labels, name='segmentation')
 
 
@@ -390,7 +418,7 @@ def crop_any(data):
     cropped_arr = data[nonzero_indices[0].min():nonzero_indices[0].max() + 1,
                   nonzero_indices[1].min():nonzero_indices[1].max() + 1,
                   nonzero_indices[2].min():nonzero_indices[2].max() + 1]
-    return cropped_arr, (nonzero_indices[0].min(),nonzero_indices[1].min(),nonzero_indices[2].min())
+    return cropped_arr, (nonzero_indices[0].min(), nonzero_indices[1].min(), nonzero_indices[2].min())
 
 
 def write_tiff(data, out_filename, compression=False):
