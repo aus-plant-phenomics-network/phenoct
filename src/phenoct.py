@@ -6,11 +6,13 @@ import napari
 import numpy as np
 import tifffile
 from napari_animation import Animation
-from plantcv import plantcv as pcv
 from scipy import ndimage as ndi
 from skimage.feature import peak_local_max
 from skimage.segmentation import watershed
+from skimage.morphology import remove_small_objects
+
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 
 
 class CT:
@@ -47,16 +49,17 @@ class CT:
         """
         Finds the non-zero extents of a 3D array and copies the original by slicing it.
         :param s_data:
-        :return: 3D numpy array
         """
 
         self.data = crop_any(self.data)
+
+    def downsample(self):
+        self.data = (self.data // 256).astype('uint8')
 
     def crop_segmented(self):
         """
         Finds the non-zero extents of a 3D array and copies the original by slicing it.
         :param s_data:
-        :return: 3D numpy array
         """
 
         if self.segmented_data is None:
@@ -86,7 +89,7 @@ class CT:
 
 class Tube(CT):
 
-    def create_animation(self, filename, colormap='PiYG'):
+    def create_animation(self, filename, colormap='gray', rendering='attenuated_mip'):
         """
         Creates a 3D "fly-around" animation and saves to mp4 file.
         :param data: 3D Object
@@ -104,6 +107,7 @@ class Tube(CT):
         viewer.dims.ndisplay = 3
         viewer.camera.zoom = 0.25
         viewer.layers[0].colormap = colormap
+        viewer.layers[0].rendering = rendering
         viewer.camera.angles = (180.0, 0.0, 0.0)
 
         animation = Animation(viewer)
@@ -121,7 +125,7 @@ class Tube(CT):
 
     def segment_sample_holder(self, start_slice=0, stop_slice=None, tube_r=160, tube_thickness=30,
                               attenuation_threshold=None,
-                              debug=False, pcv_debug=False):
+                              debug=False):
         """
         Masks the sample from the sample holder by removing the tube and optionally the husks, based on attenuation values.
         :param data: 3D numpy array
@@ -142,39 +146,30 @@ class Tube(CT):
             :param _v_slice: slice index.
             :return: 2D mask
             """
-            import matplotlib.pyplot as plt
 
-            if pcv_debug:
-                pcv.params.debug = 'plot'
-            else:
-                pcv.params.debug = None
-
-            # TODO: Remove plantcv and replace with numpy directly?
             if isinstance(attenuation_threshold, int):
 
-                med_v = attenuation_threshold
+                min_v = attenuation_threshold
+                _, s_thresh = cv2.threshold(_v_slice, min_v, 2 ** 16, cv2.THRESH_BINARY)
 
-                s_thresh = pcv.threshold.binary(gray_img=_v_slice, threshold=med_v, max_value=2 ** 16,
-                                                object_type='light')
 
             elif isinstance(attenuation_threshold, list) or isinstance(attenuation_threshold, tuple):
                 min_v = attenuation_threshold[0]
                 max_v = attenuation_threshold[1]
 
-                s_thresh_min = pcv.threshold.binary(gray_img=_v_slice, threshold=min_v, max_value=2 ** 16,
-                                                    object_type='light')
+                _, s_thresh_min = cv2.threshold(_v_slice, min_v, 2 ** 16, cv2.THRESH_BINARY)
 
-                s_thresh_max = pcv.threshold.binary(gray_img=_v_slice, threshold=max_v, max_value=2 ** 16,
-                                                    object_type='dark')
+                _, s_thresh_max = cv2.threshold(_v_slice, max_v, 2 ** 16, cv2.THRESH_BINARY_INV)
 
-                s_thresh = pcv.logical_and(s_thresh_min, s_thresh_max)
+                s_thresh = cv2.bitwise_and(s_thresh_min, s_thresh_max)
+
 
             elif attenuation_threshold is None:
 
-                med_v = (_v_slice.max() + _v_slice.min()) // 2
+                min_v = (_v_slice.max() + _v_slice.min()) // 2
 
-                s_thresh = pcv.threshold.binary(gray_img=_v_slice, threshold=med_v, max_value=2 ** 16,
-                                                object_type='light')
+                _, s_thresh = cv2.threshold(_v_slice, min_v, 2 ** 16, cv2.THRESH_BINARY)
+
             else:
                 raise Exception("Please specify attenuation threshold as an integer or list.")
 
@@ -218,11 +213,17 @@ class Tube(CT):
                 print('no circles found. issue.')
                 raise
 
-            comb_mask = pcv.logical_and(bin_img1=circ_mask, bin_img2=s_thresh)
+            comb_mask = cv2.bitwise_and(circ_mask, s_thresh)
 
             try:
                 # if nothing is detected, fill will fail.
-                final_mask = pcv.fill(bin_img=comb_mask, size=10)
+                # Find and fill contours
+                bool_img = remove_small_objects(comb_mask.astype(bool), 10)
+
+                # Cast boolean image to binary and make a copy of the binary image for returning
+                final_mask = np.copy(bool_img.astype(np.uint8) * 255)
+
+
             except RuntimeError:
                 final_mask = comb_mask
 
@@ -257,7 +258,7 @@ class Tube(CT):
         if self.segmented_data is None:
             raise Exception("Data has not yet been segmented.")
 
-        data_to_watershed, t = crop_any(self.segmented_data)
+        data_to_watershed, t = crop_any(self.segmented_data, return_translations=True)
 
         # print(translations)
         # return
@@ -396,8 +397,10 @@ class Tube(CT):
             compression='zlib'
         )
 
-    def view_segmented_data(self):
-        viewer = napari.view_image(self.segmented_data)
+    def view_segmented_data(self, contrast_limits=(0, 15000)):
+        if self.segmented_data is None:
+            raise Exception("Data has not yet been segmented.")
+        viewer = napari.view_image(self.segmented_data, contrast_limits=contrast_limits)
 
     def view_labelled_data(self):
         viewer = napari.view_image(self.data)
@@ -407,18 +410,26 @@ class Tube(CT):
         labels_layer = viewer.add_labels(self.labels, name='segmentation')
 
 
-def crop_any(data):
+def crop_any(data, return_translations=False):
     """
 
     :param data:
     :return:
     """
+
+    print('here')
     nonzero_indices = np.nonzero(data)
+    print('there')
+    print(nonzero_indices)
+
     # create a new array with only the non-zero values
     cropped_arr = data[nonzero_indices[0].min():nonzero_indices[0].max() + 1,
                   nonzero_indices[1].min():nonzero_indices[1].max() + 1,
                   nonzero_indices[2].min():nonzero_indices[2].max() + 1]
-    return cropped_arr, (nonzero_indices[0].min(), nonzero_indices[1].min(), nonzero_indices[2].min())
+    if return_translations:
+        return cropped_arr, (nonzero_indices[0].min(), nonzero_indices[1].min(), nonzero_indices[2].min())
+    else:
+        return cropped_arr
 
 
 def write_tiff(data, out_filename, compression=False):
