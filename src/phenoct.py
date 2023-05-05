@@ -457,4 +457,6 @@ def write_8bit_tiff(data, out_filename, compression=False):
     :return: None
     """
 
-    write_tiff((data / 256), out_filename, compression)
+    data_8_bit = (data // 256).astype('uint8')
+
+    write_tiff(data_8_bit, out_filename, compression)
