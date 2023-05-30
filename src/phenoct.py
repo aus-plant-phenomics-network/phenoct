@@ -45,6 +45,8 @@ class CT:
             mode='r',
         )
 
+        print(self.data.dtype)
+
     def crop(self):
         """
         Finds the non-zero extents of a 3D array and copies the original by slicing it.
@@ -67,21 +69,86 @@ class CT:
 
         self.segmented_data = crop_any(self.segmented_data)
 
-    def write_data_tiff(self, out_filename, compression=False):
-        write_tiff(self.data, out_filename, compression)
+    def write_data_tiff(self, out_filename, bit_depth=16, compression=True):
+        """
+        Writes a 3D numpy array to a tiff file.
+        :param data:
+        :param out_filename: output filename, optionally including path
+        :param compression: boolean True or False, to use zlib compression.
+        :return: None
+        """
 
-    def write_data_8_bit_tiff(self, out_filename, compression=False):
-        write_8bit_tiff(self.data, out_filename, compression)
+        # Determine the appropriate data type based on the input string
+        if bit_depth == 8:
+            data_type = np.int8
+            conversion_factor = 256
+            converted_array = (self.data // conversion_factor).astype(data_type)
+        elif bit_depth == 16:
+            converted_array = self.data
+        elif bit_depth == 32:
+            data_type = np.uint32
+            conversion_factor = 65536
+            converted_array = self.data.astype(data_type)
+            converted_array = converted_array * conversion_factor
 
-    def write_segmented_data_tiff(self, out_filename, compression=False):
+        else:
+            raise ValueError(f"Invalid dtype: {bit_depth}. Please choose between 8, 16, or 32.")
+
+        print(self.data.dtype)
+        print(f'Min value: {np.min(self.data)}')
+        print(f'Max value: {np.max(self.data)}')
+
+        print(converted_array.dtype)
+        print(f'Min value: {np.min(converted_array)}')
+        print(f'Max value: {np.max(converted_array)}')
+
+        tifffile.imwrite(
+            out_filename,
+            converted_array,
+            metadata={'axes': 'ZYX'},
+            compression='zlib' if compression else None
+        )
+
+
+    def write_segmented_data_tiff(self, out_filename, bit_depth=16, compression=True):
+        """
+        Writes a 3D numpy array to a tiff file.
+        :param data:
+        :param out_filename: output filename, optionally including path
+        :param compression: boolean True or False, to use zlib compression.
+        :return: None
+        """
         if self.segmented_data is None:
             raise Exception("Not yet segemented.")
-        write_tiff(self.segmented_data, out_filename, compression)
+        # Determine the appropriate data type based on the input string
+        if bit_depth == 8:
+            data_type = np.uint8
+            conversion_factor = 256
+            converted_array = (self.segmented_data // conversion_factor).astype(data_type)
+        elif bit_depth == 16:
+            converted_array = self.segmented_data
+        elif bit_depth == 32:
+            data_type = np.uint32
+            conversion_factor = 65536
+            converted_array = self.segmented_data.astype(data_type)
+            converted_array = converted_array * conversion_factor
+        else:
+            raise ValueError(f"Invalid dtype: {bit_depth}. Please choose between 8, 16, or 32.")
 
-    def write_segmented_data_8_bit_tiff(self, out_filename, compression=False):
-        if self.segmented_data is None:
-            raise Exception("Not yet segemented.")
-        write_8bit_tiff(self.segmented_data, out_filename, compression)
+        print(self.segmented_data.dtype)
+        print(f'Min value: {np.min(self.segmented_data)}')
+        print(f'Max value: {np.max(self.segmented_data)}')
+
+        print(converted_array.dtype)
+        print(f'Min value: {np.min(converted_array)}')
+        print(f'Max value: {np.max(converted_array)}')
+
+        tifffile.imwrite(
+            out_filename,
+            converted_array,
+            metadata={'axes': 'ZYX'},
+            compression='zlib' if compression else None
+        )
 
     def view_data(self):
         viewer = napari.view_image(self.data)
@@ -416,10 +483,7 @@ def crop_any(data, return_translations=False):
     :param data:
     :return:
     """
-
-    print('here')
     nonzero_indices = np.nonzero(data)
-    print('there')
     print(nonzero_indices)
 
     # create a new array with only the non-zero values
@@ -430,33 +494,3 @@ def crop_any(data, return_translations=False):
         return cropped_arr, (nonzero_indices[0].min(), nonzero_indices[1].min(), nonzero_indices[2].min())
     else:
         return cropped_arr
-
-
-def write_tiff(data, out_filename, compression=False):
-    """
-    Writes a 3D numpy array to a tiff file.
-    :param data:
-    :param out_filename: output filename, optionally including path
-    :param compression: boolean True or False, to use zlib compression.
-    :return: None
-    """
-    tifffile.imwrite(
-        out_filename,
-        data,
-        metadata={'axes': 'ZYX'},
-        compression='zlib' if compression else None
-    )
-
-
-def write_8bit_tiff(data, out_filename, compression=False):
-    """
-    Converts a 3D numpy array to 8 bit, then write to a tiff file.
-    :param data: 3D numpy array
-    :param out_filename: output filename, optionally including path.
-    :param compression: boolean True or False, to use zlib compression.
-    :return: None
-    """
-
-    data_8_bit = (data // 256).astype('uint8')
-
-    write_tiff(data_8_bit, out_filename, compression)
