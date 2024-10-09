@@ -40,9 +40,9 @@ class CT:
         self.data = np.memmap(
             filename,
             offset=2048,
-            dtype='uint16',
+            dtype="uint16",
             shape=shape,
-            mode='r',
+            mode="r",
         )
 
         print(self.data.dtype)
@@ -50,18 +50,16 @@ class CT:
     def crop(self):
         """
         Finds the non-zero extents of a 3D array and copies the original by slicing it.
-        :param s_data:
         """
 
         self.data = crop_any(self.data)
 
     def downsample(self):
-        self.data = (self.data // 256).astype('uint8')
+        self.data = (self.data // 256).astype("uint8")
 
     def crop_segmented(self):
         """
         Finds the non-zero extents of a 3D array and copies the original by slicing it.
-        :param s_data:
         """
 
         if self.segmented_data is None:
@@ -72,48 +70,19 @@ class CT:
     def write_data_tiff(self, out_filename, bit_depth=16, compression=True):
         """
         Writes a 3D numpy array to a tiff file.
-        :param data:
+        :param bit_depth:
         :param out_filename: output filename, optionally including path
         :param compression: boolean True or False, to use zlib compression.
         :return: None
         """
 
         # Determine the appropriate data type based on the input string
-        if bit_depth == 8:
-            data_type = np.int8
-            conversion_factor = 256
-            converted_array = (self.data // conversion_factor).astype(data_type)
-        elif bit_depth == 16:
-            converted_array = self.data
-        elif bit_depth == 32:
-            data_type = np.uint32
-            conversion_factor = 65536
-            converted_array = self.data.astype(data_type)
-            converted_array = converted_array * conversion_factor
-
-        else:
-            raise ValueError(f"Invalid dtype: {bit_depth}. Please choose between 8, 16, or 32.")
-
-        print(self.data.dtype)
-        print(f'Min value: {np.min(self.data)}')
-        print(f'Max value: {np.max(self.data)}')
-
-        print(converted_array.dtype)
-        print(f'Min value: {np.min(converted_array)}')
-        print(f'Max value: {np.max(converted_array)}')
-
-        tifffile.imwrite(
-            out_filename,
-            converted_array,
-            metadata={'axes': 'ZYX'},
-            compression='zlib' if compression else None
-        )
-
+        convert_and_write_tiff(self.data, bit_depth, compression, out_filename)
 
     def write_segmented_data_tiff(self, out_filename, bit_depth=16, compression=True):
         """
         Writes a 3D numpy array to a tiff file.
-        :param data:
+        :param bit_depth:
         :param out_filename: output filename, optionally including path
         :param compression: boolean True or False, to use zlib compression.
         :return: None
@@ -121,33 +90,8 @@ class CT:
         if self.segmented_data is None:
             raise Exception("Not yet segemented.")
         # Determine the appropriate data type based on the input string
-        if bit_depth == 8:
-            data_type = np.uint8
-            conversion_factor = 256
-            converted_array = (self.segmented_data // conversion_factor).astype(data_type)
-        elif bit_depth == 16:
-            converted_array = self.segmented_data
-        elif bit_depth == 32:
-            data_type = np.uint32
-            conversion_factor = 65536
-            converted_array = self.segmented_data.astype(data_type)
-            converted_array = converted_array * conversion_factor
-        else:
-            raise ValueError(f"Invalid dtype: {bit_depth}. Please choose between 8, 16, or 32.")
-
-        print(self.segmented_data.dtype)
-        print(f'Min value: {np.min(self.segmented_data)}')
-        print(f'Max value: {np.max(self.segmented_data)}')
-
-        print(converted_array.dtype)
-        print(f'Min value: {np.min(converted_array)}')
-        print(f'Max value: {np.max(converted_array)}')
-
-        tifffile.imwrite(
-            out_filename,
-            converted_array,
-            metadata={'axes': 'ZYX'},
-            compression='zlib' if compression else None
+        convert_and_write_tiff(
+            self.segmented_data, bit_depth, compression, out_filename
         )
 
     def view_data(self):
@@ -156,10 +100,11 @@ class CT:
 
 class Tube(CT):
 
-    def create_animation(self, filename, colormap='gray', rendering='attenuated_mip'):
+    def create_animation(self, filename, colormap="gray", rendering="attenuated_mip"):
         """
         Creates a 3D "fly-around" animation and saves to mp4 file.
-        :param data: 3D Object
+        :param rendering:
+        :param colormap:
         :param filename: Filename to output
         :return:
         """
@@ -178,7 +123,7 @@ class Tube(CT):
         viewer.camera.angles = (180.0, 0.0, 0.0)
 
         animation = Animation(viewer)
-        viewer.update_console({'animation': animation})
+        viewer.update_console({"animation": animation})
 
         num_steps = 6
         for i in range(0, num_steps + 1):
@@ -190,9 +135,15 @@ class Tube(CT):
         # TODO: Ensure viewer closes properly
         viewer.close()
 
-    def segment_sample_holder(self, start_slice=0, stop_slice=None, tube_r=160, tube_thickness=30,
-                              attenuation_threshold=None,
-                              debug=False):
+    def segment_sample_holder(
+        self,
+        start_slice=0,
+        stop_slice=None,
+        tube_r=160,
+        tube_thickness=30,
+        attenuation_threshold=None,
+        debug=False,
+    ):
         """
         Masks the sample from the sample holder by removing the tube and optionally the husks, based on attenuation values.
         :param data: 3D numpy array
@@ -217,30 +168,36 @@ class Tube(CT):
             if isinstance(attenuation_threshold, int):
 
                 min_v = attenuation_threshold
-                _, s_thresh = cv2.threshold(_v_slice, min_v, 2 ** 16, cv2.THRESH_BINARY)
+                _, s_thresh = cv2.threshold(_v_slice, min_v, 2**16, cv2.THRESH_BINARY)
 
-
-            elif isinstance(attenuation_threshold, list) or isinstance(attenuation_threshold, tuple):
+            elif isinstance(attenuation_threshold, list) or isinstance(
+                attenuation_threshold, tuple
+            ):
                 min_v = attenuation_threshold[0]
                 max_v = attenuation_threshold[1]
 
-                _, s_thresh_min = cv2.threshold(_v_slice, min_v, 2 ** 16, cv2.THRESH_BINARY)
+                _, s_thresh_min = cv2.threshold(
+                    _v_slice, min_v, 2**16, cv2.THRESH_BINARY
+                )
 
-                _, s_thresh_max = cv2.threshold(_v_slice, max_v, 2 ** 16, cv2.THRESH_BINARY_INV)
+                _, s_thresh_max = cv2.threshold(
+                    _v_slice, max_v, 2**16, cv2.THRESH_BINARY_INV
+                )
 
                 s_thresh = cv2.bitwise_and(s_thresh_min, s_thresh_max)
-
 
             elif attenuation_threshold is None:
 
                 min_v = (_v_slice.max() + _v_slice.min()) // 2
 
-                _, s_thresh = cv2.threshold(_v_slice, min_v, 2 ** 16, cv2.THRESH_BINARY)
+                _, s_thresh = cv2.threshold(_v_slice, min_v, 2**16, cv2.THRESH_BINARY)
 
             else:
-                raise Exception("Please specify attenuation threshold as an integer or list.")
+                raise Exception(
+                    "Please specify attenuation threshold as an integer or list."
+                )
 
-            s_thresh = s_thresh.astype('uint8')
+            s_thresh = s_thresh.astype("uint8")
 
             if debug:
                 plt.imshow(s_thresh)
@@ -254,10 +211,18 @@ class Tube(CT):
                 plt.title("Slice")
                 plt.show()
 
-            tube_slice_8bit = (_v_slice // 256).astype('uint8')
+            tube_slice_8bit = (_v_slice // 256).astype("uint8")
 
-            circles = cv2.HoughCircles(tube_slice_8bit, cv2.HOUGH_GRADIENT, 1, 200, param1=50, param2=30, minRadius=150,
-                                       maxRadius=0)
+            circles = cv2.HoughCircles(
+                tube_slice_8bit,
+                cv2.HOUGH_GRADIENT,
+                1,
+                200,
+                param1=50,
+                param2=30,
+                minRadius=150,
+                maxRadius=0,
+            )
 
             if circles is not None and len(circles) == 1:
                 circles = np.round(circles[0, :]).astype("int")
@@ -277,7 +242,7 @@ class Tube(CT):
                 plt.imshow(_v_slice)
                 plt.title("Slice")
                 plt.show()
-                print('no circles found. issue.')
+                print("no circles found. issue.")
                 raise
 
             comb_mask = cv2.bitwise_and(circ_mask, s_thresh)
@@ -290,20 +255,21 @@ class Tube(CT):
                 # Cast boolean image to binary and make a copy of the binary image for returning
                 final_mask = np.copy(bool_img.astype(np.uint8) * 255)
 
-
             except RuntimeError:
                 final_mask = comb_mask
 
             return final_mask
 
         # o_height = stop_slice - start_slice if stop_slice is not None else self.data.shape[0]
-        segmented_data = np.zeros(self.data.shape, dtype='uint16')
-        masks = np.zeros(self.data.shape, dtype='uint16')
+        segmented_data = np.zeros(self.data.shape, dtype="uint16")
+        masks = np.zeros(self.data.shape, dtype="uint16")
 
         if stop_slice is None:
             stop_slice = self.data.shape[0]
 
-        for v_slice in (pbar := tqdm(range(start_slice, stop_slice), total=stop_slice - start_slice)):
+        for v_slice in (
+            pbar := tqdm(range(start_slice, stop_slice), total=stop_slice - start_slice)
+        ):
             pbar.set_description(f"Segmenting slice: {v_slice}")
             img = self.data[v_slice, :, :]
 
@@ -311,7 +277,9 @@ class Tube(CT):
             masks[v_slice] = mask
 
             masked = img.copy()
-            masked[np.where(mask == 0)] = 0  # pcv.apply_mask(img=img, mask=mask, mask_color='white')
+            masked[np.where(mask == 0)] = (
+                0  # pcv.apply_mask(img=img, mask=mask, mask_color='white')
+            )
             segmented_data[v_slice] = masked.reshape(img.shape)
 
         self.segmented_data = segmented_data
@@ -366,51 +334,54 @@ class Tube(CT):
             :param byteorder: byte order
             :return: encoded metadata
             """
-            header = [{'>': b'IJIJ', '<': b'JIJI'}[byteorder]]
+            header = [{">": b"IJIJ", "<": b"JIJI"}[byteorder]]
             bytecounts = [0]
             body = []
 
             def writestring(_data, _byteorder):
-                return _data.encode('utf-16' + {'>': 'be', '<': 'le'}[_byteorder])
+                return _data.encode("utf-16" + {">": "be", "<": "le"}[_byteorder])
 
             def writedoubles(_data, _byteorder):
-                return struct.pack(_byteorder + ('d' * len(data)), *_data)
+                return struct.pack(_byteorder + ("d" * len(data)), *_data)
 
             def writebytes(_data, _byteorder):
                 return _data.tobytes()
 
             metadata_types = (
-                ('Info', b'info', 1, writestring),
-                ('Labels', b'labl', None, writestring),
-                ('Ranges', b'rang', 1, writedoubles),
-                ('LUTs', b'luts', None, writebytes),
-                ('Plot', b'plot', 1, writebytes),
-                ('ROI', b'roi ', 1, writebytes),
-                ('Overlays', b'over', None, writebytes))
+                ("Info", b"info", 1, writestring),
+                ("Labels", b"labl", None, writestring),
+                ("Ranges", b"rang", 1, writedoubles),
+                ("LUTs", b"luts", None, writebytes),
+                ("Plot", b"plot", 1, writebytes),
+                ("ROI", b"roi ", 1, writebytes),
+                ("Overlays", b"over", None, writebytes),
+            )
 
             for key, mtype, count, func in metadata_types:
                 if key not in metadata:
                     continue
-                if byteorder == '<':
+                if byteorder == "<":
                     mtype = mtype[::-1]
                 values = metadata[key]
                 if count is None:
                     count = len(values)
                 else:
                     values = [values]
-                header.append(mtype + struct.pack(byteorder + 'I', count))
+                header.append(mtype + struct.pack(byteorder + "I", count))
                 for value in values:
                     data = func(value, byteorder)
                     body.append(data)
                     bytecounts.append(len(data))
 
-            body = b''.join(body)
-            header = b''.join(header)
+            body = b"".join(body)
+            header = b"".join(header)
             data = header + body
             bytecounts[0] = len(header)
-            bytecounts = struct.pack(byteorder + ('I' * len(bytecounts)), *bytecounts)
-            return ((50839, 'B', len(data), data, True),
-                    (50838, 'I', len(bytecounts) // 4, bytecounts, True))
+            bytecounts = struct.pack(byteorder + ("I" * len(bytecounts)), *bytecounts)
+            return (
+                (50839, "B", len(data), data, True),
+                (50838, "I", len(bytecounts) // 4, bytecounts, True),
+            )
 
         N = np.max(self.labels)
         HSV_tuples = [(x * 1.0 / N, 1.0, 1.0) for x in range(N)]
@@ -450,18 +421,19 @@ class Tube(CT):
         lut_blue = np.zeros((3, 256), dtype=np.uint8)
         lut_blue[2, :] = val_range
 
-        ijmeta = imagej_metadata_tags({'LUTs': [lut_red, lut_green, lut_blue]}, '>')
+        ijmeta = imagej_metadata_tags({"LUTs": [lut_red, lut_green, lut_blue]}, ">")
 
         tifffile.imwrite(
             filename,
-            coloured.astype('uint8'),
+            coloured.astype("uint8"),
             imagej=True,
             extratags=ijmeta,
-            metadata={'axes': 'ZCYX',
-                      # mode: composite breaks SyGlass but is necessary for ImageJ
-                      'mode': 'composite'
-                      },
-            compression='zlib'
+            metadata={
+                "axes": "ZCYX",
+                # mode: composite breaks SyGlass but is necessary for ImageJ
+                "mode": "composite",
+            },
+            compression="zlib",
         )
 
     def view_segmented_data(self, contrast_limits=(0, 15000)):
@@ -473,13 +445,14 @@ class Tube(CT):
         viewer = napari.view_image(self.data)
 
         if self.labels is None:
-            raise ("Not yet watershed.")
-        labels_layer = viewer.add_labels(self.labels, name='segmentation')
+            raise "Not yet watershed."
+        labels_layer = viewer.add_labels(self.labels, name="segmentation")
 
 
 def crop_any(data, return_translations=False):
     """
 
+    :param return_translations:
     :param data:
     :return:
     """
@@ -487,10 +460,47 @@ def crop_any(data, return_translations=False):
     print(nonzero_indices)
 
     # create a new array with only the non-zero values
-    cropped_arr = data[nonzero_indices[0].min():nonzero_indices[0].max() + 1,
-                  nonzero_indices[1].min():nonzero_indices[1].max() + 1,
-                  nonzero_indices[2].min():nonzero_indices[2].max() + 1]
+    cropped_arr = data[
+        nonzero_indices[0].min() : nonzero_indices[0].max() + 1,
+        nonzero_indices[1].min() : nonzero_indices[1].max() + 1,
+        nonzero_indices[2].min() : nonzero_indices[2].max() + 1,
+    ]
     if return_translations:
-        return cropped_arr, (nonzero_indices[0].min(), nonzero_indices[1].min(), nonzero_indices[2].min())
+        return cropped_arr, (
+            nonzero_indices[0].min(),
+            nonzero_indices[1].min(),
+            nonzero_indices[2].min(),
+        )
     else:
         return cropped_arr
+
+
+def convert_and_write_tiff(data, bit_depth, compression, out_filename):
+    if bit_depth == 8:
+        data_type = np.int8
+        conversion_factor = 256
+        converted_array = (data // conversion_factor).astype(data_type)
+    elif bit_depth == 16:
+        converted_array = data
+    elif bit_depth == 32:
+        data_type = np.uint32
+        conversion_factor = 65536
+        converted_array = data.astype(data_type)
+        converted_array = converted_array * conversion_factor
+
+    else:
+        raise ValueError(
+            f"Invalid dtype: {bit_depth}. Please choose between 8, 16, or 32."
+        )
+    print(data.dtype)
+    print(f"Min value: {np.min(data)}")
+    print(f"Max value: {np.max(data)}")
+    print(converted_array.dtype)
+    print(f"Min value: {np.min(converted_array)}")
+    print(f"Max value: {np.max(converted_array)}")
+    tifffile.imwrite(
+        out_filename,
+        converted_array,
+        metadata={"axes": "ZYX"},
+        compression="zlib" if compression else None,
+    )
