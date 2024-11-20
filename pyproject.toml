@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "phenoct"
-version = "1.2.0"
+version = "1.2.2"
 authors = [
     { name = "George Sainsbury", email = "george.sainsbury@adelaide.edu.au" },
 ]

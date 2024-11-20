@@ -2,6 +2,7 @@ import colorsys
 import struct
 
 import cv2
+import time
 import napari
 import numpy as np
 import tifffile
@@ -498,9 +499,15 @@ def convert_and_write_tiff(data, bit_depth, compression, out_filename):
     #print(converted_array.dtype)
     #print(f"Min value: {np.min(converted_array)}")
     #print(f"Max value: {np.max(converted_array)}")
+    estimated_size = converted_array.nbytes
+    bigtiff_needed = estimated_size > 4 * 1024**3  # 4GB threshold
+
+    print(f"Compression: {compression}, BigTIFF: {bigtiff_needed}")
+    
     tifffile.imwrite(
         out_filename,
         converted_array,
         metadata={"axes": "ZYX"},
         compression="zlib" if compression else None,
+        bigtiff=bigtiff_needed
     )
