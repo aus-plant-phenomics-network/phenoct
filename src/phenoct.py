@@ -492,12 +492,12 @@ def convert_and_write_tiff(data, bit_depth, compression, out_filename):
         raise ValueError(
             f"Invalid dtype: {bit_depth}. Please choose between 8, 16, or 32."
         )
-    print(data.dtype)
-    print(f"Min value: {np.min(data)}")
-    print(f"Max value: {np.max(data)}")
-    print(converted_array.dtype)
-    print(f"Min value: {np.min(converted_array)}")
-    print(f"Max value: {np.max(converted_array)}")
+    #print(data.dtype)
+    #print(f"Min value: {np.min(data)}")
+    #print(f"Max value: {np.max(data)}")
+    #print(converted_array.dtype)
+    #print(f"Min value: {np.min(converted_array)}")
+    #print(f"Max value: {np.max(converted_array)}")
     tifffile.imwrite(
         out_filename,
         converted_array,
