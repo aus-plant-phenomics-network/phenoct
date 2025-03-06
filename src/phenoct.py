@@ -2,18 +2,16 @@ import colorsys
 import struct
 
 import cv2
-import time
+import matplotlib.pyplot as plt
 import napari
 import numpy as np
 import tifffile
 from napari_animation import Animation
 from scipy import ndimage as ndi
 from skimage.feature import peak_local_max
-from skimage.segmentation import watershed
 from skimage.morphology import remove_small_objects
-
+from skimage.segmentation import watershed
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 
 class CT:
@@ -38,15 +36,15 @@ class CT:
 
             shape = (hdr[3], hdr[1], hdr[0])
 
-        self.data = np.memmap(
-            filename,
-            offset=2048,
-            dtype="uint16",
-            shape=shape,
-            mode="r",
-        )
+            self.data = np.memmap(
+                filename,
+                offset=2048,
+                dtype="uint16",
+                shape=shape,
+                mode="r",
+            )
 
-        print(self.data.dtype)
+            print(self.data.dtype)
 
     def crop(self):
         """
@@ -57,6 +55,18 @@ class CT:
 
     def downsample(self):
         self.data = (self.data // 256).astype("uint8")
+
+    def write_maximal_projections(self, out_filename, bit_depth=16, compression=True):
+
+            for axis in range(3):
+                flattened_0 = np.max(self.segmented_data, axis=axis)
+
+                tifffile.imwrite(
+                    f"{axis}_{out_filename}",
+                    flattened_0,
+                    metadata={}, #{"axes": "ZYX"},
+                    compression="zlib" if compression else None,
+                )
 
     def crop_segmented(self):
         """
@@ -493,21 +503,21 @@ def convert_and_write_tiff(data, bit_depth, compression, out_filename):
         raise ValueError(
             f"Invalid dtype: {bit_depth}. Please choose between 8, 16, or 32."
         )
-    #print(data.dtype)
-    #print(f"Min value: {np.min(data)}")
-    #print(f"Max value: {np.max(data)}")
-    #print(converted_array.dtype)
-    #print(f"Min value: {np.min(converted_array)}")
-    #print(f"Max value: {np.max(converted_array)}")
+    # print(data.dtype)
+    # print(f"Min value: {np.min(data)}")
+    # print(f"Max value: {np.max(data)}")
+    # print(converted_array.dtype)
+    # print(f"Min value: {np.min(converted_array)}")
+    # print(f"Max value: {np.max(converted_array)}")
     estimated_size = converted_array.nbytes
     bigtiff_needed = estimated_size > 4 * 1024**3  # 4GB threshold
 
     print(f"Compression: {compression}, BigTIFF: {bigtiff_needed}")
-    
+
     tifffile.imwrite(
         out_filename,
         converted_array,
         metadata={"axes": "ZYX"},
         compression="zlib" if compression else None,
-        bigtiff=bigtiff_needed
+        bigtiff=bigtiff_needed,
     )
