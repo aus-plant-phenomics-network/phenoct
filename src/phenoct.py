@@ -3,15 +3,15 @@ import struct
 
 import cv2
 import matplotlib.pyplot as plt
-import napari
 import numpy as np
+import scipy
 import tifffile
-from napari_animation import Animation
 from scipy import ndimage as ndi
 from skimage.feature import peak_local_max
 from skimage.morphology import remove_small_objects
 from skimage.segmentation import watershed
 from tqdm import tqdm
+import pyvista as pv
 
 
 class CT:
@@ -19,12 +19,12 @@ class CT:
     segmented_data = None
     labels = None
 
-    def __init__(self, filename):
+    def __init__(self, filename: str):
         self.filename = filename
 
         self.read_rek_file(filename)
 
-    def read_rek_file(self, filename):
+    def read_rek_file(self, filename: str):
         """
         Reads a REK file into memory.
         :param filename: The location of the .REK file.
@@ -36,15 +36,16 @@ class CT:
 
             shape = (hdr[3], hdr[1], hdr[0])
 
-            self.data = np.memmap(
-                filename,
-                offset=2048,
-                dtype="uint16",
-                shape=shape,
-                mode="r",
-            )
+        self.data = np.memmap(
+            filename,
+            offset=2048,
+            dtype="uint16",
+            shape=shape,
+            mode="r",
+        )
 
-            print(self.data.dtype)
+        print(self.data.dtype)
+        print(self.data.shape)
 
     def crop(self):
         """
@@ -56,17 +57,30 @@ class CT:
     def downsample(self):
         self.data = (self.data // 256).astype("uint8")
 
-    def write_maximal_projections(self, out_filename, bit_depth=16, compression=True):
+    def write_maximal_projections(self, out_filename, compression=True):
 
-            for axis in range(3):
-                flattened_0 = np.max(self.segmented_data, axis=axis)
+        for axis in range(1, 3):
+            flattened_0 = np.max(self.segmented_data, axis=axis)
+            tifffile.imwrite(
+                f"{out_filename}_{axis}.tiff",
+                flattened_0,
+                metadata={},
+                compression="zlib" if compression else None,
+            )
 
-                tifffile.imwrite(
-                    f"{axis}_{out_filename}",
-                    flattened_0,
-                    metadata={}, #{"axes": "ZYX"},
-                    compression="zlib" if compression else None,
-                )
+        rotated_data = scipy.ndimage.rotate(
+            self.segmented_data, 45, axes=(1, 2), reshape=True, order=1
+        )
+
+        for axis in range(1, 3):
+            rotated_projection = np.max(rotated_data, axis=axis)
+
+            tifffile.imwrite(
+                f"{out_filename}_rotated_{axis}.tiff",
+                rotated_projection,
+                metadata={},
+                compression="zlib" if compression else None,
+            )
 
     def crop_segmented(self):
         """
@@ -105,16 +119,16 @@ class CT:
             self.segmented_data, bit_depth, compression, out_filename
         )
 
-    def view_data(self):
-        viewer = napari.view_image(self.data)
+    # TODO: Put this back. Maybe just plot?
+    # def view_data(self):
+    #     viewer = napari.view_image(self.data)
 
 
 class Tube(CT):
 
-    def create_animation(self, filename, colormap="gray", rendering="attenuated_mip"):
+    def create_animation(self, filename, colormap="viridis"):
         """
         Creates a 3D "fly-around" animation and saves to mp4 file.
-        :param rendering:
         :param colormap:
         :param filename: Filename to output
         :return:
@@ -123,28 +137,52 @@ class Tube(CT):
         if self.segmented_data is None:
             raise Exception("Not yet segemented.")
 
-        viewer = napari.view_image(self.segmented_data)
+        self.crop_segmented()
 
-        viewer.window.resize(200, 600)
+        normalised_segmented_data = (
+            (self.segmented_data - self.segmented_data.min())
+            / (self.segmented_data.max() - self.segmented_data.min())
+            * 255
+        ).astype(np.uint8)
 
-        viewer.dims.ndisplay = 3
-        viewer.camera.zoom = 0.25
-        viewer.layers[0].colormap = colormap
-        viewer.layers[0].rendering = rendering
-        viewer.camera.angles = (180.0, 0.0, 0.0)
+        grid = pv.ImageData()
+        grid.dimensions = np.array(normalised_segmented_data.shape)
+        grid.spacing = (1, 1, 1)  # Adjust if needed
+        grid.point_data["values"] = normalised_segmented_data.flatten(
+            order="F"
+        )  # Column-major flattening
 
-        animation = Animation(viewer)
-        viewer.update_console({"animation": animation})
+        # Translate the object to the origin (0, 0, 0)
+        translation_vector = [-x for x in grid.center]
+        grid.translate(translation_vector)
 
-        num_steps = 6
-        for i in range(0, num_steps + 1):
-            angle = 360.0 * i / num_steps
-            viewer.camera.angles = (180.0, angle, 0.0)
-            animation.capture_keyframe()
-        animation.animate(filename, canvas_only=True)
+        # Set up the plotter
+        plotter = pv.Plotter(off_screen=True)
+        plotter.add_volume(grid, opacity="linear", cmap=colormap)
+        plotter.remove_scalar_bar()
+        plotter.window_size = [208, 608]
+        plotter.open_movie(filename)
 
-        # TODO: Ensure viewer closes properly
-        viewer.close()
+        initial_distance = 3000
+
+        initial_cam_pos = (grid.center[0] // 2, initial_distance, initial_distance)
+        focus = (
+            grid.center[0] // 2,
+            grid.center[1],
+            grid.center[2],
+        )
+
+        # Animate camera orbit around Z-axis
+        n_frames = 36
+        for i in range(n_frames):
+            angle = np.radians(i * (360 / n_frames))  # Convert degrees to radians
+            y = initial_distance * np.cos(angle)  # Move along Y
+            z = initial_distance * np.sin(angle)  # Move along Z
+
+            plotter.camera_position = [(initial_cam_pos[0], y, z), focus, (-1, 0, 0)]
+            plotter.write_frame()
+
+        plotter.close()
 
     def segment_sample_holder(
         self,

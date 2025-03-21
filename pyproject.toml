@@ -1,35 +1,22 @@
-[build-system]
-requires = ["setuptools~=75.1.0"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "phenoct"
-version = "1.2.2"
-authors = [
-    { name = "George Sainsbury", email = "george.sainsbury@adelaide.edu.au" },
-]
+version = "1.3.0"
 description = "A packge with utilities for analysing data from the PhenoCT system at The Plant Accelerator."
+authors = [
+    {name = "George Sainsbury",email = "gsainsbury86@gmail.com"}
+]
 readme = "README.md"
-requires-python = ">=3.12"
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "Operating System :: OS Independent",
-]
-
+requires-python = ">=3.9"
 dependencies = [
-    "pandas~=2.2.3",
-    "scikit-learn~=1.5.2",
-    "tifffile~=2024.9.20",
-    "napari~=0.5.4",
-    "napari-animation~=0.0.8",
-    "matplotlib~=3.9.2",
-    "opencv-python~=4.10.0.84",
-    "scipy~=1.14.1",
-    "tqdm~=4.66.5",
-    "PyQt5-Qt5<5.16.0,>=5.15.2"
+    "opencv-python (>=4.11.0.86,<5.0.0.0)",
+    "matplotlib (>=3.9.4,<4.0.0)",
+    "scipy (>=1.13.1,<2.0.0)",
+    "tqdm (>=4.67.1,<5.0.0)",
+    "requests (>=2.32.3,<3.0.0)",
+    "pyvista (>=0.44.2,<1.0.0)"
 ]
 
-[project.urls]
-"Homepage" = "https://github.com/aus-plant-phenomics-network/phenoct"
-"Bug Tracker" = "https://github.com/aus-plant-phenomics-network/phenoct/issues"
 
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
