@@ -15,12 +15,13 @@ import pyvista as pv
 
 
 class CT:
-    data = None
-    segmented_data = None
-    labels = None
+
 
     def __init__(self, filename: str):
         self.filename = filename
+        self.data = None
+        self.segmented_data = None
+        self.labels = None
 
         self.read_rek_file(filename)
 
