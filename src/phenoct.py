@@ -24,6 +24,19 @@ class CT:
 
         self.read_rek_file(filename)
 
+
+    def __enter__(self):
+        # Initialize or allocate resources
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        # Clean up resources
+        del self.data
+        if self.segmented_data:
+            del self.segmented_data
+        if self.labels:
+            del self.labels
+
     def read_rek_file(self, filename: str):
         """
         Reads a REK file into memory.
@@ -119,9 +132,6 @@ class CT:
             self.segmented_data, bit_depth, compression, out_filename
         )
 
-    # TODO: Put this back. Maybe just plot?
-    # def view_data(self):
-    #     viewer = napari.view_image(self.data)
 
 
 class Tube(CT):
@@ -484,18 +494,6 @@ class Tube(CT):
             },
             compression="zlib",
         )
-
-    def view_segmented_data(self, contrast_limits=(0, 15000)):
-        if self.segmented_data is None:
-            raise Exception("Data has not yet been segmented.")
-        viewer = napari.view_image(self.segmented_data, contrast_limits=contrast_limits)
-
-    def view_labelled_data(self):
-        viewer = napari.view_image(self.data)
-
-        if self.labels is None:
-            raise "Not yet watershed."
-        labels_layer = viewer.add_labels(self.labels, name="segmentation")
 
 
 def crop_any(data, return_translations=False):
