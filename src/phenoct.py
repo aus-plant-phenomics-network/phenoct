@@ -31,11 +31,13 @@ class CT:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Clean up resources
-        del self.data
-        if self.segmented_data:
+        if hasattr(self, "data"):
+            del self.data
+        if hasattr(self, "segmented_data"):
             del self.segmented_data
-        if self.labels:
+        if hasattr(self, "labels"):
             del self.labels
+
 
     def read_rek_file(self, filename: str):
         """
