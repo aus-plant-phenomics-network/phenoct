@@ -16,7 +16,6 @@ import pyvista as pv
 
 class CT:
 
-
     def __init__(self, filename: str):
         self.filename = filename
         self.data = None
@@ -24,7 +23,6 @@ class CT:
         self.labels = None
 
         self.read_rek_file(filename)
-
 
     def __enter__(self):
         # Initialize or allocate resources
@@ -38,7 +36,6 @@ class CT:
             del self.segmented_data
         if hasattr(self, "labels"):
             del self.labels
-
 
     def read_rek_file(self, filename: str):
         """
@@ -73,10 +70,21 @@ class CT:
     def downsample(self):
         self.data = (self.data // 256).astype("uint8")
 
-    def write_maximal_projections(self, out_filename, compression=True):
+    def write_maximal_projections(
+        self, out_filename, compression=True, normalized=True
+    ):
+
+        if normalized:
+            output_data = (
+                (self.segmented_data - self.segmented_data.min())
+                / (self.segmented_data.max() - self.segmented_data.min())
+                * 255
+            ).astype(np.uint8)
+        else:
+            output_data = self.segmented_data
 
         for axis in range(1, 3):
-            flattened_0 = np.max(self.segmented_data, axis=axis)
+            flattened_0 = np.max(output_data, axis=axis)
             tifffile.imwrite(
                 f"{out_filename}_{axis}.tiff",
                 flattened_0,
@@ -85,12 +93,11 @@ class CT:
             )
 
         rotated_data = scipy.ndimage.rotate(
-            self.segmented_data, 45, axes=(1, 2), reshape=True, order=1
+            output_data, 45, axes=(1, 2), reshape=True, order=1
         )
 
         for axis in range(1, 3):
             rotated_projection = np.max(rotated_data, axis=axis)
-
             tifffile.imwrite(
                 f"{out_filename}_rotated_{axis}.tiff",
                 rotated_projection,
@@ -134,7 +141,6 @@ class CT:
         convert_and_write_tiff(
             self.segmented_data, bit_depth, compression, out_filename
         )
-
 
 
 class Tube(CT):
