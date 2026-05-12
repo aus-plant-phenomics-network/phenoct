@@ -1,17 +1,18 @@
 import colorsys
 import struct
 
-import cv2
 import matplotlib.pyplot as plt
 import numpy as np
+import pyvista as pv
 import scipy
 import tifffile
 from scipy import ndimage as ndi
+from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter1d
+from scipy.ndimage.filters import gaussian_filter
 from skimage.feature import peak_local_max
-from skimage.morphology import remove_small_objects
 from skimage.segmentation import watershed
 from tqdm import tqdm
-import pyvista as pv
 
 
 class CT:
@@ -125,9 +126,10 @@ class CT:
         """
 
         # Determine the appropriate data type based on the input string
+
         convert_and_write_tiff(self.data, bit_depth, compression, out_filename)
 
-    def write_segmented_data_tiff(self, out_filename, bit_depth=16, compression=True):
+    def write_segmented_data_tiff(self, out_filename, bit_depth=16, compression=True, crop=True):
         """
         Writes a 3D numpy array to a tiff file.
         :param bit_depth:
@@ -138,8 +140,12 @@ class CT:
         if self.segmented_data is None:
             raise Exception("Not yet segemented.")
         # Determine the appropriate data type based on the input string
+        if crop:
+            output_data = crop_any(self.segmented_data)
+        else:
+            output_data = self.segmented_data
         convert_and_write_tiff(
-            self.segmented_data, bit_depth, compression, out_filename
+            output_data, bit_depth, compression, out_filename
         )
 
 
@@ -158,9 +164,20 @@ class Tube(CT):
 
         self.crop_segmented()
 
+        render_vol = self.segmented_data.astype(float)
+
+        # Denoise
+        render_vol = gaussian_filter(render_vol, sigma=1.0)
+
+        # Mask background hard
+        render_vol[self.segmented_data == 0] = 0
+
+        # Downsample for rendering
+        render_vol = render_vol[::2, ::2, ::2]
+
         normalised_segmented_data = (
-            (self.segmented_data - self.segmented_data.min())
-            / (self.segmented_data.max() - self.segmented_data.min())
+            (render_vol - render_vol.min())
+            / (render_vol.max() - render_vol.min())
             * 255
         ).astype(np.uint8)
 
@@ -180,8 +197,7 @@ class Tube(CT):
         plotter.add_volume(grid, opacity="linear", cmap=colormap)
         plotter.remove_scalar_bar()
         plotter.window_size = [208, 608]
-        plotter.open_movie(filename)
-
+        plotter.open_movie(filename, framerate=12)
         initial_distance = 3000
 
         initial_cam_pos = (grid.center[0] // 2, initial_distance, initial_distance)
@@ -203,168 +219,253 @@ class Tube(CT):
 
         plotter.close()
 
+
     def segment_sample_holder(
-        self,
-        start_slice=0,
-        stop_slice=None,
-        tube_r=160,
-        tube_thickness=30,
-        attenuation_threshold=None,
-        debug=False,
+            self,
+            start_slice=0,
+            stop_slice=None,
+            radial_margin=2,
+            n_angles=360,
+            debug=False,
     ):
         """
-        Masks the sample from the sample holder by removing the tube and optionally the husks, based on attenuation values.
-        :param data: 3D numpy array
-        :param start_slice: starting slice (Z direction is negative. i.e. slice 0 is the top.)
-        :param stop_slice: slice at which to stop. 2640 is normally a good value.
-        :param tube_r: the radius of the sample_holder, in voxels.
-        :param tube_thickness: the thickness of the sample_holder tube, in voxels.
-        :param attenuation_threshold: either the attenuation value above which to include (int), or a list of 2 ints.
-                If not specified, defaults to the mean.
-        :param debug: use plot as output for images.
-        :param pcv_debug: enable plantcv debugging.
-        :return: 3D masked data, and 3D binary masks
+        Remove an acrylic tube by detecting its cylindrical shell using
+        angularly-adaptive radial geometry.
+
+        This method:
+        - does NOT assume tube is brighter than sample
+        - does NOT model the interior
+        - ignores caps automatically
+        - adapts to ellipticity / slight miscentering
         """
-
-        def segment_slice(_v_slice):
-            """
-            Segments a single vertical slice.
-            :param _v_slice: slice index.
-            :return: 2D mask
-            """
-
-            if isinstance(attenuation_threshold, int):
-
-                min_v = attenuation_threshold
-                _, s_thresh = cv2.threshold(_v_slice, min_v, 2**16, cv2.THRESH_BINARY)
-
-            elif isinstance(attenuation_threshold, list) or isinstance(
-                attenuation_threshold, tuple
-            ):
-                min_v = attenuation_threshold[0]
-                max_v = attenuation_threshold[1]
-
-                _, s_thresh_min = cv2.threshold(
-                    _v_slice, min_v, 2**16, cv2.THRESH_BINARY
-                )
-
-                _, s_thresh_max = cv2.threshold(
-                    _v_slice, max_v, 2**16, cv2.THRESH_BINARY_INV
-                )
-
-                s_thresh = cv2.bitwise_and(s_thresh_min, s_thresh_max)
-
-            elif attenuation_threshold is None:
-
-                min_v = (_v_slice.max() + _v_slice.min()) // 2
-
-                _, s_thresh = cv2.threshold(_v_slice, min_v, 2**16, cv2.THRESH_BINARY)
-
-            else:
-                raise Exception(
-                    "Please specify attenuation threshold as an integer or list."
-                )
-
-            s_thresh = s_thresh.astype("uint8")
-
-            if debug:
-                plt.imshow(s_thresh)
-                plt.title("Thresh")
-                plt.show()
-
-            h, w = _v_slice.shape
-
-            if debug:
-                plt.imshow(_v_slice)
-                plt.title("Slice")
-                plt.show()
-
-            tube_slice_8bit = (_v_slice // 256).astype("uint8")
-
-            circles = cv2.HoughCircles(
-                tube_slice_8bit,
-                cv2.HOUGH_GRADIENT,
-                1,
-                200,
-                param1=50,
-                param2=30,
-                minRadius=150,
-                maxRadius=0,
-            )
-
-            if circles is not None and len(circles) == 1:
-                circles = np.round(circles[0, :]).astype("int")
-                (x, y, r) = circles[0]
-                # Ignore the R from circle finding. Important thing is the centre point.
-                circ_mask = np.zeros(_v_slice.shape, dtype=np.uint8)
-                cv2.circle(circ_mask, (x, y), tube_r - tube_thickness, 255, 1)
-
-                flood_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
-                cv2.floodFill(circ_mask, flood_mask, (h // 2, w // 2), 255)
-
-                if debug:
-                    plt.imshow(circ_mask)
-                    plt.title("Tube Mask")
-                    plt.show()
-            else:
-                plt.imshow(_v_slice)
-                plt.title("Slice")
-                plt.show()
-                print("no circles found. issue.")
-                raise
-
-            comb_mask = cv2.bitwise_and(circ_mask, s_thresh)
-
-            try:
-                # if nothing is detected, fill will fail.
-                # Find and fill contours
-                bool_img = remove_small_objects(comb_mask.astype(bool), 10)
-
-                # Cast boolean image to binary and make a copy of the binary image for returning
-                final_mask = np.copy(bool_img.astype(np.uint8) * 255)
-
-            except RuntimeError:
-                final_mask = comb_mask
-
-            return final_mask
-
-        # o_height = stop_slice - start_slice if stop_slice is not None else self.data.shape[0]
-        segmented_data = np.zeros(self.data.shape, dtype="uint16")
-        masks = np.zeros(self.data.shape, dtype="uint16")
 
         if stop_slice is None:
             stop_slice = self.data.shape[0]
 
-        for v_slice in (
-            pbar := tqdm(range(start_slice, stop_slice), total=stop_slice - start_slice)
-        ):
-            pbar.set_description(f"Segmenting slice: {v_slice}")
-            img = self.data[v_slice, :, :]
+        volume = self.data[start_slice:stop_slice]
 
-            mask = segment_slice(img)
-            masks[v_slice] = mask
+        # ------------------------------------------------------------
+        # 1. Z-maximum projection (stable tube signal)
+        # ------------------------------------------------------------
+        proj = np.max(volume, axis=0).astype(np.float32)
 
-            masked = img.copy()
-            masked[np.where(mask == 0)] = (
-                0  # pcv.apply_mask(img=img, mask=mask, mask_color='white')
-            )
-            segmented_data[v_slice] = masked.reshape(img.shape)
+        h, w = proj.shape
+        yy, xx = np.indices((h, w))
 
-        self.segmented_data = segmented_data
+        # ------------------------------------------------------------
+        # 2. Robust tube centre (intensity-weighted image moments)
+        # ------------------------------------------------------------
+        total = proj.sum()
+        cy = (yy * proj).sum() / total
+        cx = (xx * proj).sum() / total
 
-    def watershed_seeds(self):
-        """
-        Generates a 3D numpy array of labels/indices based on watershed analysis.
-        NOTE, this process may be slow.
-        :return: 3D numpy array of labels.
-        """
+        # ------------------------------------------------------------
+        # 3. Radial + angular coordinates
+        # ------------------------------------------------------------
+        rr = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+        theta = np.arctan2(yy - cy, xx - cx)
+
+        max_r = int(rr.max()) - 1
+
+        # ------------------------------------------------------------
+        # 4. Global radial profile (for sanity checking)
+        # ------------------------------------------------------------
+        radial_profile = np.zeros(max_r, dtype=np.float32)
+
+        for r in range(max_r):
+            shell = (rr >= r) & (rr < r + 1)
+            if np.any(shell):
+                radial_profile[r] = np.median(proj[shell])
+
+        radial_profile = gaussian_filter1d(radial_profile, sigma=2)
+
+        grad_global = np.gradient(radial_profile)
+
+        # ------------------------------------------------------------
+        # 5. Angularly adaptive inner tube radius
+        # ------------------------------------------------------------
+        angles = np.linspace(-np.pi, np.pi, n_angles, endpoint=False)
+        inner_radii = np.zeros(n_angles, dtype=np.float32)
+
+        angle_width = np.pi / n_angles  # ~1 degree
+
+        for i, a in enumerate(angles):
+            sector = np.abs(np.angle(np.exp(1j * (theta - a)))) < angle_width
+
+            if not np.any(sector):
+                inner_radii[i] = np.nan
+                continue
+
+            r_vals = rr[sector]
+            i_vals = proj[sector]
+
+            order = np.argsort(r_vals)
+            r_sorted = r_vals[order]
+            i_sorted = i_vals[order]
+
+            prof = gaussian_filter1d(i_sorted, sigma=2)
+            grad = np.gradient(prof)
+
+            r_start = int(0.25 * len(prof))  # ignore centre/sample
+            tube_idx = r_start + np.argmax(grad[r_start:])
+
+            baseline = np.median(np.abs(grad[:tube_idx]))
+            inner_candidates = np.where(np.abs(grad[:tube_idx]) < baseline)[0]
+
+            if len(inner_candidates):
+                inner_radii[i] = r_sorted[inner_candidates[-1]]
+            else:
+                inner_radii[i] = np.nan
+
+        # clean angular outliers
+        med_r = np.nanmedian(inner_radii)
+        inner_radii[np.isnan(inner_radii)] = med_r
+        inner_radii = gaussian_filter1d(inner_radii, sigma=5)
+
+        if debug:
+            print(f"Tube centre: cx={cx:.2f}, cy={cy:.2f}")
+            print(f"Median inner radius: {med_r:.2f}")
+
+        # ------------------------------------------------------------
+        # 6. Build angularly adaptive tube-removal mask
+        # ------------------------------------------------------------
+        remove_mask_2d = np.zeros_like(rr, dtype=bool)
+
+        for i, a in enumerate(angles):
+            sector = np.abs(np.angle(np.exp(1j * (theta - a)))) < angle_width
+            remove_r = inner_radii[i] - radial_margin
+            remove_mask_2d[sector & (rr >= remove_r)] = True
+
+        # ------------------------------------------------------------
+        # 7. Apply to full volume
+        # ------------------------------------------------------------
+        segmented_data = self.data.copy()
+        masks = np.zeros_like(self.data, dtype=np.uint8)
+
+        for z in tqdm(range(start_slice, stop_slice), desc="Removing tube"):
+            segmented_data[z][remove_mask_2d] = 0
+            masks[z][~remove_mask_2d] = 255
+
+        # ------------------------------------------------------------
+        # 7. Histogram-based background removal (robust)
+        # ------------------------------------------------------------
+        interior = (masks > 0) & (segmented_data > 0)
+        vals = segmented_data[interior]
+
+        hist, bin_edges = np.histogram(vals, bins=256)
+        hist_smooth = gaussian_filter1d(hist.astype(float), sigma=2)
+
+        bg_peak_idx = np.argmax(hist_smooth)
+        bg_peak_val = bin_edges[bg_peak_idx]
+
+        cutoff = bg_peak_val * 1.2  # safe margin above background
+        print(f"Histogram background peak: {bg_peak_val:.1f}")
+        print(f"Cutoff used: {cutoff:.1f}")
+
+        candidate = segmented_data.copy()
+        candidate[candidate < cutoff] = 0
+
+        safe_removal = False
+        if safe_removal:
+            # Remove diffuse noise by connectivity
+            labels_cc, n = ndi.label(candidate > 0)
+            sizes = ndi.sum(candidate > 0, labels_cc, range(1, n + 1))
+
+            cleaned = np.zeros_like(candidate)
+            for i, s in enumerate(sizes, start=1):
+                if s > 200:
+                    cleaned[labels_cc == i] = candidate[labels_cc == i]
+
+            self.segmented_data = cleaned[start_slice:stop_slice]
+
+        else:
+
+            cleaned = candidate
+
+            self.segmented_data = candidate[start_slice:stop_slice]
+
+        if debug:
+            z = (start_slice + stop_slice) // 2
+
+            before = segmented_data[z]
+            after = cleaned[z]
+
+            p_lo, p_hi = np.percentile(before[before > 0], (1, 99))
+            before_disp = np.clip((before - p_lo) / (p_hi - p_lo), 0, 1)
+            after_disp = np.clip((after - p_lo) / (p_hi - p_lo), 0, 1)
+
+            fig, ax = plt.subplots(1, 3, figsize=(15, 5))
+            ax[0].imshow(before_disp, cmap="gray")
+            ax[0].set_title("Before cleanup")
+
+            ax[1].imshow(after_disp, cmap="gray")
+            ax[1].set_title("After cleanup")
+
+            ax[2].imshow((before > 0) & (after == 0), cmap="hot")
+            ax[2].set_title("Removed voxels")
+
+            for a in ax:
+                a.axis("off")
+
+            plt.show()
+
+
+        # ------------------------------------------------------------
+        # 8. Debug visualisations
+        # ------------------------------------------------------------
+        if debug:
+            # Radial profile + gradient
+            fig, ax = plt.subplots(2, 1, figsize=(8, 6), sharex=True)
+            ax[0].plot(radial_profile)
+            ax[0].set_title("Global radial median intensity")
+            ax[1].plot(grad_global)
+            ax[1].set_title("Global radial gradient")
+            plt.show()
+
+            # Inner radius vs angle
+            plt.figure(figsize=(8, 3))
+            plt.plot(np.rad2deg(angles), inner_radii)
+            plt.xlabel("Angle (deg)")
+            plt.ylabel("Inner tube radius (px)")
+            plt.title("Angular inner tube radius")
+            plt.show()
+
+            # Overlay detected boundary on projection
+            p_lo, p_hi = np.percentile(proj, (1, 99))
+            proj_disp = np.clip((proj - p_lo) / (p_hi - p_lo), 0, 1)
+
+            rgb = np.dstack([proj_disp, proj_disp, proj_disp])
+
+            for i, a in enumerate(angles):
+                r0 = inner_radii[i]
+                r1 = r0 - radial_margin
+
+                x0 = cx + r0 * np.cos(a)
+                y0 = cy + r0 * np.sin(a)
+                x1 = cx + r1 * np.cos(a)
+                y1 = cy + r1 * np.sin(a)
+
+                if 0 <= int(y0) < h and 0 <= int(x0) < w:
+                    rgb[int(y0), int(x0)] = [255, 0, 0]  # red = detected wall
+
+                if 0 <= int(y1) < h and 0 <= int(x1) < w:
+                    rgb[int(y1), int(x1)] = [0, 255, 0]  # green = removal boundary
+
+            plt.figure(figsize=(6, 6))
+
+            plt.imshow(rgb)
+            plt.title("Red = detected wall, Green = effective removal")
+            plt.axis("off")
+            plt.show()
+
+
+    def watershed_seeds(self, debug=False):
+
+
         if self.segmented_data is None:
             raise Exception("Data has not yet been segmented.")
 
         data_to_watershed, t = crop_any(self.segmented_data, return_translations=True)
-
-        # print(translations)
-        # return
 
         # Now we want to separate the two objects in image
         # Generate the markers as local maxima of the distance to the background
@@ -379,6 +480,20 @@ class Tube(CT):
         for i in range(3):
             translated_labels = np.roll(translated_labels, t[i], axis=i)
         self.labels = translated_labels
+        # ------------------------------------------------------------
+        # 5. Debug
+        # ------------------------------------------------------------
+        if debug and len(coords) > 0:
+            z = coords[len(coords) // 2][0]
+            fig, ax = plt.subplots(1, 3, figsize=(12, 4))
+            ax[0].imshow(mask[z], cmap="gray");
+            ax[0].set_title("Grain mask")
+            ax[1].imshow(distance[z], cmap="magma");
+            ax[1].set_title("Distance")
+            ax[2].imshow(labels[z], cmap="tab20");
+            ax[2].set_title("Labels")
+            for a in ax: a.axis("off")
+            plt.show()
 
     def write_colourised_tiff(self, filename):
         """
